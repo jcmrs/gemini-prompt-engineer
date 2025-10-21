@@ -1,0 +1,551 @@
+```markdown
+# Jules — Complete Instruction & Canonical Prompt (merged & corrected)
+
+Purpose
+-------
+This is the canonical instruction file for Jules (the GitHub-connected coding AI agent) to implement the stage‑1 Prompt Engineering Agent (PEA). It merges the original human prompt (verbatim), the stage‑1 policy decisions, the backend and UX requirements, and the exact implementation/CI/PR rules. This revised version fixes important ambiguities from prior drafts:
+
+- The Go module path used for implementation MUST be github.com/jcmrs/gemini-prompt-engineer (see section Implementation Notes).
+- Branch / PR policy is unambiguous: create branch `jules/scaffold-initial`, push the branch, open a draft PR to `main`; do NOT push direct to main.
+- The canonical original prompt is preserved verbatim in docs/jules_prompt.txt (underscore). Implementers must verify byte-for-byte equality and restore it if different.
+- CI specifics are explicit (ubuntu-latest runner and toolchain steps) and must use PEA_GEMINI_MOCK=true.
+
+IMPORTANT NOTE about the canonical prompt vs implementation specifics:
+- The original human prompt is preserved verbatim in docs/jules_prompt.txt as requested by the user. That original text may reference earlier module names. For implementation and tooling, use module = github.com/jcmrs/gemini-prompt-engineer (this is REQUIRED). The canonical prompt must remain unchanged, but implementation guidance in this file (and go.mod) must follow the repository path above.
+
+Summary of high-level constraints (non-negotiable)
+- NO API KEYS or static secrets anywhere in the repository or CI.
+- Real Gemini CLI must NEVER be invoked in CI. CI/tests MUST use gemini-mock (env var PEA_GEMINI_MOCK=true).
+- docs/jules_prompt.txt must contain the original human prompt verbatim (verify or restore).
+- Implementation MUST use Go module path: github.com/jcmrs/gemini-prompt-engineer.
+- All persisted artifacts must include provenance: model_name, model_config, prompt_version, run_id, input, output, timestamp (see storage schema).
+- Running local user tests is opt-in only (explicit allow_local_tests flag and CLI/UX consent).
+- Do not auto-run multiple candidate prompts without explicit user instruction.
+
+Deliverables (stage‑1 minimal functional scaffold)
+- cmd/pea/main.go — CLI: check-auth, serve, run, export
+- internal/gemini/wrapper.go — wrapper interface + Mock & Real modes
+- scripts/gemini-mock/main.go — deterministic buildable mock that emits line-delimited JSON frames
+- storage/db.go — InitDB + migrations creating the exact schema below (includes metadata JSON columns)
+- server/server.go — REST + WebSocket per contract
+- engine/engine.go — user-driven iterative engine scaffold
+- evaluator/evaluator.go — at least three scorers (structure, safe unit-test stub opt-in, safety heuristic)
+- supervisor/supervisor.go — process control scaffold
+- models/models.go — shared domain models
+- utils/redact.go — redaction utilities for default privacy behavior
+- utils/attachments.go — attachment ingestion + text extraction scaffold
+- templates/*.yaml — >=5 example prompt templates (YAML schema below)
+- client/flutter_app/lib/... — minimal Flutter Windows desktop skeleton wired to endpoints
+- tests/go/unit/... and tests/go/integration/... — unit and in‑process integration tests
+- .github/workflows/ci.yml — CI that uses gemini-mock, ubuntu-latest runner, and installs toolchain for CGO
+- README.md — Windows-first quickstart and Gemini CLI auth instructions
+- docs/jules_prompt.txt — canonical original human prompt (verbatim). Jules must verify byte-for-byte.
+
+File / Branch / PR policy (explicit)
+- Work flow (single, definitive sequence):
+  1. git checkout main && git pull origin main
+  2. git checkout -b jules/scaffold-initial
+  3. Implement changes in that branch (small, focused commits, conventional messages)
+  4. Push branch to remote origin
+  5. Open a DRAFT PR from jules/scaffold-initial -> main with the required PR body (see PR Body section)
+  6. If CI passes automatically, mark PR READY FOR REVIEW. If CI fails, keep draft and include raw failing logs + TODOs.
+- DO NOT push direct to main. DO NOT merge automatically.
+
+Implementation notes (critical, unambiguous)
+- Go module: all implementation and go.mod MUST use:
+  module github.com/jcmrs/gemini-prompt-engineer
+  (If the canonical prompt mentions a different module name, preserve it in docs/jules_prompt.txt only; do NOT use it for go.mod.)
+- CI runner specifics (required):
+  - Use ubuntu-latest for both jobs.
+  - Ensure build-essential and other CGO toolchain are available:
+    - steps: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libsqlite3-dev
+  - Set environment variable PEA_GEMINI_MOCK=true for CI jobs and do not invoke gemini CLI.
+- Ephemeral token behavior (stage‑1 deterministic):
+  - Ephemeral token is a UUID generated on run creation and stored in runs.ephemeral_token.
+  - WebSocket validates that ws /ws/run/{run_id}?token={token} matches runs.id and runs.ephemeral_token.
+  - This can be mocked for tests.
+- DB metadata columns:
+  - Add `metadata JSON` columns to messages and runs (messages.metadata, runs.metadata). These MUST include keys: model_name, model_config, prompt_version, run_id, timestamp when persisted.
+- run API must accept run_options.allow_local_tests (boolean) and CLI must provide --allow-local-tests / --run-local-tests flag. Server must reject requests demanding local tests unless allow_local_tests true and confirmed by a local UI/CLI flag (opt-in).
+- If the platform is Windows and process-group APIs differ, add [TODO-JULES] to wrapper code and implement best-effort: on cancellation attempt kill the process and any child PIDs (fallback to PID list kill if Setpgid unavailable).
+
+Exact API & WebSocket contract (implement exactly)
+REST (JSON)
+- GET /health
+  - 200 { "status": "ok", "version": "<commit-sha>" }
+- GET /auth/check
+  - 200 { "authenticated": true|false, "message": "..." }
+- POST /conversations
+  - Body: { "title": "<title>" }
+  - Returns created conversation object: { "id","title","created_at","updated_at" }
+- GET /conversations
+  - Returns list of conversations.
+- GET /conversations/{id}
+  - Returns conversation metadata + messages array.
+- POST /conversations/{id}/messages
+  - Body:
+    {
+      "role":"user",
+      "text":"...",
+      "attachments":[ "<attachment_id>" ],
+      "prompt_template_id": null|string,
+      "run_mode":"single"|"iterative",
+      "no_store": bool
+    }
+  - Stores the message; if run requested returns { "run_id": "<id>" } else returns created message object.
+- POST /runs
+  - Body:
+    {
+      "template_id":"...",
+      "n_candidates": 5,
+      "model":"gemini-2.5-flash",
+      "max_iterations":3,
+      "no_store": false,
+      "run_options": { "allow_local_tests": bool }
+    }
+  - Returns: { "run_id":"..." }
+- GET /runs/{id}
+  - Returns run artifacts and evaluations.
+- POST /attachments
+  - multipart file upload -> returns { "attachment_id":"...", "text_extract":"..." } (text_extract optional)
+
+WebSocket streaming
+- Endpoint: ws://localhost:{port}/ws/run/{run_id}?token={ephemeral_token}
+- Line-delimited JSON frames. Exact shapes:
+  - token:
+    { "type":"token", "data":"...", "chunk_index": <int>, "is_final": false }
+  - meta:
+    { "type":"meta", "model":"gemini-2.5-flash", "usage": {"tokens": 123} }
+  - progress:
+    { "type":"progress", "percent": 0-100 }
+  - final:
+    { "type":"final", "content":"...", "metrics": {...} }
+  - error:
+    { "type":"error", "code":"TIMEOUT"|"MODEL_ERROR", "message":"..." }
+
+Gemini wrapper — internal/gemini/wrapper.go (exact interface & behavior)
+- Interface:
+  type Wrapper interface {
+    CheckAuth(ctx context.Context) error
+    RunChatStreaming(ctx context.Context, model string, input string, settings map[string]interface{}, onToken func(token string, idx int, isFinal bool)) (finalResult string, err error)
+    Embeddings(ctx context.Context, text string) ([]float32, error) // optional
+  }
+- NewWrapperFromEnv() checks PEA_GEMINI_MOCK env var and returns Mock or Real wrapper.
+- CheckAuth(ctx):
+  - Mock -> return nil
+  - Real -> try in order:
+    1) gemini whoami --format=json
+    2) gemini auth status --format=json
+    3) fallback safe chat test: echo 'ping' | gemini chat --model=gemini-2.5-flash --format=json
+  - If none succeed return an informative error.
+- RunChatStreaming:
+  - Mock: deterministic in-memory token emission calling onToken with small sleeps; no external process spawn.
+  - Real: spawn gemini chat via exec.CommandContext, write input to stdin, parse streaming JSON frames if present; else simulate streaming by emitting substrings. Ensure ctx cancellation kills process group (Setpgid on Unix or fallback kill child PIDs on Windows). Respect settings for timeouts/retries. Add [TODO-JULES] comments for Windows specifics.
+
+scripts/gemini-mock/main.go — deterministic mock
+- Outputs line-delimited JSON frames: meta -> token frames -> progress -> final.
+- Use small sleeps to simulate streaming.
+- Must build: go build ./scripts/gemini-mock.
+
+Storage & DB schema (exact SQL table definitions)
+- Use SQLite; path configurable via PEA_DB_PATH (default %APPDATA%/pea on Windows or ./data).
+- Tables (create exactly these columns):
+
+conversations (
+  id TEXT PRIMARY KEY,
+  title TEXT,
+  created_at TEXT,
+  updated_at TEXT
+);
+
+messages (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT,
+  role TEXT,
+  content TEXT,
+  attachments JSON,
+  model TEXT,
+  model_config JSON,
+  prompt_version TEXT,
+  metadata JSON,      -- must contain model_name/model_config/prompt_version/run_id/timestamp where applicable
+  created_at TEXT
+);
+
+prompts (
+  id TEXT PRIMARY KEY,
+  version TEXT,
+  author TEXT,
+  intent TEXT,
+  description TEXT,
+  prompt_text TEXT,
+  settings JSON,
+  examples JSON,
+  created_at TEXT
+);
+
+runs (
+  id TEXT PRIMARY KEY,
+  prompt_id TEXT,
+  model TEXT,
+  settings JSON,
+  status TEXT,
+  metadata JSON,      -- must contain model_name/model_config/prompt_version/run_id/timestamp where applicable
+  ephemeral_token TEXT,
+  created_at TEXT
+);
+
+evaluations (
+  id TEXT PRIMARY KEY,
+  run_id TEXT,
+  metrics JSON,
+  created_at TEXT
+);
+
+attachments (
+  id TEXT PRIMARY KEY,
+  filename TEXT,
+  path TEXT,
+  mimetype TEXT,
+  text_extract TEXT,
+  created_at TEXT
+);
+
+audit_logs (
+  id TEXT PRIMARY KEY,
+  action TEXT,
+  actor TEXT,
+  details JSON,
+  created_at TEXT
+);
+
+- Add FTS5 virtual tables for full-text search on prompts and messages. Example (stage‑1):
+  CREATE VIRTUAL TABLE prompts_fts USING fts5(prompt_text, content='prompts', content_rowid='rowid');
+  CREATE VIRTUAL TABLE messages_fts USING fts5(content, content='messages', content_rowid='rowid');
+
+Prompt template YAML schema (templates/*.yaml)
+- Fields required: id, version, created_at, author, intent, description,
+  model_preferences: { primary: gemini-2.5-flash, fallback: gemini-2.5-pro },
+  prompt_text (templated), positive_examples:[], negative_examples:[]
+- Provide at least 5 example templates.
+
+Iterative engine (user-driven; exact behavior)
+- Coordinator steps (triggered only on explicit user request):
+  1) Intake: parse user intent and constraints
+  2) Draft generation: produce N candidate prompts if the user requested N
+  3) Execution: run candidate(s) via wrapper.RunChatStreaming
+  4) Evaluation: evaluate outputs via evaluator plugins
+  5) Refinement: propose refined prompts (user must explicitly request)
+  6) Verification: re-run refined prompts only if user requests
+  7) Export & persist artifacts with provenance
+- Default behavior: do NOT auto-run N duplicates. The system may offer "Generate N variants" but will only run them if user confirms.
+
+Evaluator (minimum three scorers)
+- Structure scorer: regex/parse checks for required JSON/Markdown headings; returns structure_score.
+- Unit-test harness (safe stub): executing arbitrary tests is opt‑in only. For stage‑1 implement a safe stub that can run deterministic text checks; include clear opt-in flags for UI/CLI.
+- Safety heuristic: redact patterns (emails, API-like tokens, long hex), banned words; returns safety_penalty.
+- Composite scorer: weighted sum (configurable), advisory (user chooses final candidate).
+
+Testing & CI (exact requirements)
+- go.mod MUST use module github.com/jcmrs/gemini-prompt-engineer
+- Unit tests: wrapper, server handlers (httptest), storage (temp DB), engine (mocked)
+- Integration tests: tests/go/integration must:
+  - set os.Setenv("PEA_GEMINI_MOCK","true")
+  - start server.NewServer() in-process with temp DB path
+  - wait for /health
+  - create a run and open ws/run/{run_id}?token={ephemeral_token} to assert token/meta/final frames from gemini-mock
+- CI (.github/workflows/ci.yml): two jobs using ubuntu-latest
+  1) go-tests:
+     - setup-go
+     - sudo apt-get update && sudo apt-get install -y build-essential pkg-config libsqlite3-dev
+     - go mod download
+     - go vet ./...
+     - PEA_GEMINI_MOCK=true go test ./...
+  2) integration-mock:
+     - setup-go
+     - sudo apt-get update && sudo apt-get install -y build-essential pkg-config libsqlite3-dev
+     - export PEA_GEMINI_MOCK=true
+     - go test ./tests/go/integration -v
+- CI must not call real gemini CLI.
+
+Security & privacy (explicit)
+- Default redaction: redact emails, API-like tokens, long hexs, credit card patterns. Use utils/redact.go.
+- CLI flag --no-store for ephemeral runs. --no-redact allowed only for local debugging and must show explicit consent (UI/CLI).
+- Scaffold encrypted_full_content fields in DB (TODO-JULES) but leave encryption as future work.
+- Server should never log raw secrets by default.
+
+User-Facing Features & UX Specification (REQUIRED)
+(This addendum is integrated in the merged instruction to ensure Jules implements UI behaviors, not just backend scaffolding. Implementers must satisfy the UX criteria in the PR body.)
+
+Key points (must be implemented/testable):
+- Windows 11 Flutter desktop (skeleton) with:
+  - Left pane: conversations list (search, tags, new conversation)
+  - Middle: active conversation streaming tokens; input box with Run and Run(no-store) buttons
+  - Right: prompt library & template inspector with Apply/Use/Clone
+  - Top bar: global search, settings, Gemini CLI auth indicator
+- Streaming UI modes: streaming, final-only, developer slow-mode
+- Message metadata toggle (model_name, model_config, prompt_version, run_id, timestamp)
+- Copy and Copy-as-Markdown must preserve code blocks and attachments
+- Attachments: drag/drop, file picker; accept text/markdown, PNG, small code files (5–10MB)
+- Settings: default DB path, PEA_GEMINI_MOCK toggles, redaction rules, --no-store default off, theme, keyboard shortcuts
+- First-run onboarding and inline help tooltips
+- Keyboard accessibility and shortcuts (Ctrl+K search, Ctrl+Shift+C copy-as-markdown)
+- Error messages: human-first one-line with "details" expansion for raw logs
+- If Jules cannot produce GIFs/screenshots, Jules MUST include step-by-step manual validation instructions and a terminal log sample produced from gemini-mock token stream as evidence.
+
+CLI UX (cmd/pea)
+- pea check-auth -> prints JSON: { authenticated: true|false, message: "..." }
+- pea serve --db ./data/pea.db --port 8080 -> start server and log human-friendly status
+- pea run --template <id> --no-store [--allow-local-tests] -> streams token-per-line JSON frames to terminal and persists unless --no-store
+- pea export --conversation <id> --format markdown -> writes Markdown to stdout/file
+- Terminal mode: print token frames as they arrive; final content printed as Markdown with YAML frontmatter provenance.
+
+Export rules (Markdown)
+- Exported Markdown must include YAML frontmatter with provenance:
+  ---
+  model_name: "gemini-2.5-flash"
+  model_config: {...}
+  prompt_version: "vX"
+  run_id: "..."
+  timestamp: "..."
+  ---
+- Conversation transcript preserving code blocks and attachments (attachments referenced as filenames)
+
+Acceptance checklist (must be in PR body)
+- PEA_GEMINI_MOCK=true go test ./... (passes)
+- PEA_GEMINI_MOCK=true go test ./tests/go/integration -v (passes)
+- docs/jules_prompt.txt exists and byte-for-byte equals canonical original prompt
+- README updated with Windows quickstart and Gemini CLI auth instructions
+- PR includes manual UI validation checklist and at least one terminal log sample of gemini-mock streaming (if no GIF available)
+
+PR Body requirements (exact)
+- "What changed" bullet list
+- Link to docs/jules_prompt.txt
+- Human-friendly summary paragraph
+- Acceptance checklist (above)
+- TODO block listing any commands Jules could not execute (include exact commands and raw stderr/stdout)
+- Manual UI validation instructions (one-line checks) and a terminal log sample for streaming tokens (if GIFs not attached)
+
+Required outputs from Jules after branch & PR creation (single JSON object)
+- After creating branch `jules/scaffold-initial`, pushing it, and opening a DRAFT PR to `main`, Jules must return exactly one JSON object (no extra keys) in the PR comment and the agent response with these keys:
+
+{
+  "changed_files": [ "<path1>", "<path2>", ... ],
+  "commits": [ { "sha":"<sha>", "message":"<conventional commit message>" }, ... ],
+  "diffs": [ "<unified diff text for commit/file 1>", ... ],
+  "build_and_fmt_log": "<raw stdout/stderr of gofmt -w ., go vet ./..., go mod tidy, go build ./scripts/gemini-mock>",
+  "test_output": "<raw stdout/stderr of go test ./... and go test ./tests/go/integration -v>",
+  "todo": [ { "short_reason":"...", "exact_command_to_run_locally":"...", "raw_error":"...", "suggested_fix":"<patch if available>" }, ... ],
+  "pr_url": "<URL of draft PR created on the repo>",
+  "short_summary": "<one-paragraph human summary: repo state, tests result, proposed patches, next steps>"
+}
+
+- If any command could not be executed (permissions, network), do NOT invent outputs — put the attempted command and raw stderr/stdout in the "todo" array.
+
+Failure handling & TODO policy
+- If Jules cannot run `go mod tidy`, `go vet`, `go test`, or `go build` due to environment/permissions, include exact command and raw stderr/stdout in the PR TODO block and JSON "todo" array.
+- Do not modify external resources outside the repository.
+- Tag remaining code-level items with [TODO-JULES].
+
+Canonical original prompt (VERBATIM) — MUST be present in docs/jules_prompt.txt unchanged
+--- BEGIN CANONICAL PROMPT ---
+You are Jules, the Coding AI Agent for github.com/jcmrs/prompt-engineer. This message is the full, canonical specification for implementing the Prompt Engineering Agent (PEA). Use branch copilot/scaff[...]
+
+This is the single source-of-truth. Implement everything in this message exactly, and commit tested, formatted code and docs. If anything cannot be completed due to environment or permission limits, a[...]
+
+High-level purpose
+
+Build a local-first Prompt Engineering Agent (PEA) that:
+Is Windows-first (target Windows 11), desktop UI (Flutter) and a supervised local backend (Go) bundled together.
+Uses the Gemini CLI as the single AI provider (OAuth via local CLI only; absolutely no API keys anywhere).
+Uses gemini-2.5-flash as the golden-path model and supports gemini-2.5-pro.
+Provides a rich streaming chat UI, conversation management, attachments (markdown, text, PNG), prompt library, search, versioned prompt artifacts, an iterative prompt-engine loop (generate→execute→refine→verify→export).
+Is privacy-first: default redaction, optional --no-store, no third-party upload unless explicitly opt-in.
+Hard constraints (must be enforced)
+
+NO API KEYS or static secrets anywhere in the repo or CI.
+Authentication: exclusively via the user’s local Gemini CLI OAuth flow. The server should only attempt to use real Gemini CLI when PEA_GEMINI_MOCK is NOT set and the CLI is authenticated.
+The repo must contain the full original human prompt in docs/jules_prompt.txt.
+CI must only use the built-in gemini-mock (PEA_GEMINI_MOCK=true). Real Gemini CLI must never be invoked in CI.
+All persisted artifacts must include provenance: timestamp, model_name, model_config, prompt_version, run_id, input, output and scores.
+Provide an opt-in --no-store flag and a --no-redact option only for local debugging (documented).
+Deliverables (what Jules must produce)
+
+Complete code changes on branch copilot/scaffoldinitial-pea:
+Go server (cmd/pea) including CLI: check-auth, serve, run, export.
+internal/gemini wrapper with robust mock and real-mode handling.
+scripts/gemini-mock (portable Go program).
+storage layer: SQLite schema and migrations (InitDB).
+server: HTTP REST + WebSocket streaming endpoints.
+engine: iterative prompt-engine scaffold that can run N candidates and evaluate (initial implementation can be partial but must be functional with mock).
+evaluator: scaffolding with at least 3 scorers (structure, simple unit test harness, safety heuristic).
+client/flutter_app skeleton that connects to WebSocket and renders streaming tokens; includes conversation list and prompt library skeleton.
+templates/ with at least 5 example templates (YAML).
+tests: unit tests and integration tests that run against gemini-mock (integration tests must be self-contained).
+.github/workflows/ci.yml updated to run tests with PEA_GEMINI_MOCK=true and either start the server in-process or run in-process tests.
+docs/jules_prompt.txt (contains the entire original human prompt that was posted as a PR comment).
+PR updates:
+Update the draft PR (copilot/scaffoldinitial-pea) with commits described above.
+Update PR body to include a short “What changed” and a link to docs/jules_prompt.txt.
+If CI passes, mark PR as ready for review (remove draft). If CI fails, keep as draft and include plain-English failure summary + exact next steps.
+Tests must pass locally and in CI with mock (unit + integration).
+README improved with Windows-first quickstart and explicit Gemini CLI auth instructions.
+Repo layout (exact)
+
+cmd/pea/main.go
+internal/
+gemini/wrapper.go
+engine/engine.go
+evaluator/evaluator.go
+storage/db.go
+server/server.go
+supervisor/supervisor.go (process control)
+models/models.go
+utils/redact.go
+utils/attachments.go
+scripts/gemini-mock/main.go (small Go program)
+client/flutter_app/lib/... (Flutter skeleton)
+templates/*.yaml
+tests/go/unit/... and tests/go/integration/...
+docs/jules_prompt.txt
+.github/workflows/ci.yml
+README.md
+APIs & WebSocket contract (exact JSON frame contracts)
+
+REST (JSON)
+GET /health -> 200 {"status":"ok","version":"<commit-sha>"}
+GET /auth/check -> 200 {"authenticated": true|false, "message": "..."}
+POST /conversations -> body { "title" } -> returns conversation object
+GET /conversations -> list
+GET /conversations/{id} -> conversation + messages
+POST /conversations/{id}/messages -> body: { "role":"user", "text":"...", "attachments":[ids], "prompt_template_id":null|string, "run_mode":"single"|"iterative", "no_store":bool } returns { "run_id": [...]
+POST /runs -> start iterative run: { "template_id":"...", "n_candidates":5, "model":"gemini-2.5-flash", "max_iterations":3, "no_store":false } returns run_id
+GET /runs/{id} -> returns artifacts, evaluations
+POST /attachments -> multipart upload -> returns attachment_id + text_extract (optional)
+WebSocket streaming:
+ws://localhost:{port}/ws/run/{run_id}?token={ephemeral_token}
+Event frames (line-delimited JSON):
+token: { "type":"token", "data":"...", "chunk_index":int, "is_final": false }
+meta: { "type":"meta", "model":"gemini-2.5-flash", "usage":{"tokens":123} }
+progress: { "type":"progress", "percent": 0-100 }
+final: { "type":"final", "content":"...", "metrics": {...} }
+error: { "type":"error", "code":"TIMEOUT"|"MODEL_ERROR", "message":"..." }
+Gemini wrapper behavior (detailed, exact)
+
+Create internal/gemini/wrapper.go with:
+type Wrapper interface { CheckAuth(ctx) error; RunChatStreaming(ctx, model, input, settings, onToken) (finalResult, error); Embeddings(ctx, text) ([]float32, error) (optional) }
+NewWrapperFromEnv() reads PEA_GEMINI_MOCK env var.
+CheckAuth(ctx): if Mock -> return nil. Else:
+Try gemini whoami --format=json. If command fails or unknown, fallback to gemini auth status --format=json (if available). If neither available, fallback to a safe chat test: echo 'ping' | gemini chat[...]
+RunChatStreaming(ctx,...):
+If Mock -> use deterministic in-memory token emission via callback (no external process spawn).
+If Real -> spawn gemini chat with exec.CommandContext and:
+Configure process group (Setpgid) so kills terminate entire group (important for Windows use appropriate syscall equivalent).
+Write input to stdin.
+If CLI supports streaming JSON frames, parse frames line-by-line and call onToken per token; else fallback to reading final JSON result and call onToken with substrings to simulate streaming and retur[...]
+Implement context cancellation: on ctx cancellation kill process group and return error.
+Handle timeouts and retries (configurable in settings).
+Add TODO comments: streaming parser improvement and fallback notes.
+Mock (scripts/gemini-mock/main.go)
+
+Implement as simple Go program: prints JSON frames line-by-line with slight sleeps to simulate streaming, then prints final frame. Buildable on CI.
+Storage & DB schema (exact)
+
+SQLite file path configurable by env PEA_DB_PATH (default: %APPDATA%/pea on Windows or ./data for dev).
+Tables:
+conversations(id TEXT PK, title TEXT, created_at TEXT, updated_at TEXT)
+messages(id TEXT PK, conversation_id TEXT, role TEXT, content TEXT, attachments JSON, model TEXT, model_config JSON, prompt_version TEXT, created_at TEXT)
+prompts(id TEXT PK, version TEXT, author TEXT, intent TEXT, description TEXT, prompt_text TEXT, settings JSON, examples JSON, created_at TEXT)
+runs(id TEXT PK, prompt_id TEXT, model TEXT, settings JSON, status TEXT, created_at TEXT)
+evaluations(id TEXT PK, run_id TEXT, metrics JSON, created_at TEXT)
+attachments(id TEXT PK, filename TEXT, path TEXT, mimetype TEXT, text_extract TEXT, created_at TEXT)
+audit_logs(id TEXT PK, action TEXT, actor TEXT, details JSON, created_at TEXT)
+Add FTS5 virtual table for text search (prompts and messages).
+Each stored row must include provenance (model, model_config, prompt_version, run_id, timestamp).
+Prompt template format (YAML)
+
+Schema fields: id, version, created_at, author, intent, description, model_preferences { primary: gemini-2.5-flash, fallback: gemini-2.5-pro }, prompt_text (templated), positive_examples[], negative_e[...]
+Provide 5 example templates in templates/.
+Iterative engine (implementation guidance)
+
+Implement a coordinator that:
+Intake: parse user intent and constraints.
+Draft generation: produce N candidate prompts (seeded by templates + small programmatic variations: role framing, constraints tightening, examples injection).
+Execution: run candidates against model (mock in tests).
+Evaluation: score outputs via evaluator plugins.
+Refinement: top-k refinement pass (ask model to rewrite prompt to address weaknesses).
+Verification: re-run refined prompts and select final.
+Export: produce artifacts and persist them.
+For this PR: implement a minimal functional loop using the mock so run returns candidates and scores.
+Evaluator (must have at least 3 scorers)
+
+Structure scorer: checks for required JSON or markdown headings using regex or JSON parse.
+Unit-test harness (for code tasks): runs provided pytest or node tests in sandboxed temp dir (for Windows keep careful about sandboxing; for this PR, run only small deterministic tests).
+Safety heuristic: redact patterns (emails, keys) and a banned-words list; produce a toxicity_penalty.
+Composite score: weighted sum (configurable).
+Testing / CI (exact requirements)
+
+Add go.mod in repo root: module github.com/jcmrs/prompt-engineer and include required deps (gorilla mux/websocket, mattn/go-sqlite3).
+Unit tests: Go unit tests for wrapper, server handlers (use httptest), storage (use temp DB), engine (mocked).
+Integration tests: tests/go/integration should start server.NewServer() in-process (call server.NewServer() in goroutine with PEA_GEMINI_MOCK=true), wait for /health, connect to ws/run/demo-run and assert token f[...]
+CI workflow (.github/workflows/ci.yml): two jobs:
+go-tests: setup go, go mod download, go vet, go test ./...
+integration-mock: setup go, set env PEA_GEMINI_MOCK=true, run go test ./tests/go/integration -v (the tests start in-process server so CI does not need to spawn background processes).
+Do NOT invoke real gemini in CI.
+Security & privacy
+
+Default storage redacts emails, API-like tokens, credit card patterns; store redacted_content and (if user opts in) encrypted full_content using local passphrase (left as TODO for this PR; include fla[...]
+Provide CLI flag --no-store for ephemeral runs.
+Document privacy tradeoffs in README.
+Windows packaging & build
+
+Provide goreleaser/build scripts but do not require signing in this PR. Document manual steps for bundling Go server + Flutter binary.
+Flutter app must be a skeleton; packaging complex installers is out of scope for this PR.
+What to do immediately in the branch (exact step-by-step for Jules)
+
+Add docs/jules_prompt.txt containing the entire original human prompt (the text the human posted as a PR comment). If it’s very long, split and name sequentially (docs/jules_prompt_part1.txt etc.). [...]
+Add go.mod with module github.com/jcmrs/prompt-engineer and the required dependencies. Run go mod tidy. Commit: "fix: add go.mod & tidy".
+Update internal/gemini/wrapper.go to implement the robustness, mock and TODOs described above. Ensure mock-mode uses in-memory emission and does not spawn external process. Commit: "fix(gemini): robus[...]
+Update tests/go/integration/test_basic_run.go to start server.NewServer() inside Test (in-process) using a temp DB directory and set os.Setenv("PEA_GEMINI_MOCK","true") inside the test. Commit: "test([...]
+Update .github/workflows/ci.yml to run unit tests and integration-mock using PEA_GEMINI_MOCK and to run go vet/gofmt. Commit: "ci: run unit + integration tests with mock".
+Ensure scripts/gemini-mock/main.go compiles (go build ./scripts/gemini-mock). Commit: "chore(mock): ensure gemini-mock buildable".
+Run gofmt -w . and go vet ./.... Fix any compile/test failures. Commit fixes as needed.
+Update README.md with Windows-first quickstart and explicit gemini auth instructions and how to run tests locally (one-liners).
+Update PR body to include a short "What changed" list and link to docs/jules_prompt.txt.
+Run tests (go test ./... and go test ./tests/go/integration -v); if tests pass, remove draft status on PR and add a plain-English summary for the non-technical user (see below).
+Human-friendly summary (to include in PR body)
+
+Plain English paragraph: "I fixed the scaffold so that unit and integration tests use a deterministic local mock. I added go.mod, made integration tests start the server in-process (so CI does not nee[...]
+Acceptance checklist:
+ go test ./... passes
+ integration tests pass with PEA_GEMINI_MOCK=true
+ docs/jules_prompt.txt present
+ README updated with simple Windows quickstart
+If you (Jules) cannot complete a step due to environment or permission limitations:
+
+Do NOT fail silently.
+Add a single top-level TODO in the PR body like: TODO: I could not run go mod tidy or push commits because [reason]. Please run: <exact command> locally and paste output here.
+If any test fails and you cannot fix it programmatically, include failing test output and a one-line explanation in plain English and a suggested command to run locally.
+Commit and PR conventions
+
+Use clear conventional commit messages.
+Keep changes small and focused; prefer multiple commits with clear messages over one large commit.
+Run gofmt -w . before committing.
+Add TODO comments for future work and tag them with [TODO-JULES] in code.
+Post-run: what you must do and then stop
+
+After making all commits and updates, run tests. If tests pass, mark PR ready for review (remove draft). If tests fail, keep PR draft and add plain-English failure summary.
+Post a single short comment on the PR tagging @jcmrs containing:
+one-sentence summary in plain English,
+link to docs/jules_prompt.txt,
+instructions for a single command the human can run locally to validate (one-liner),
+explicit note: "I did not add any API keys or attempt to run real Gemini in CI."
+Finish there and wait for human next instruction.
+--- END CANONICAL PROMPT ---
+
+Notes & clarifications
+- This merged file replaces ambiguous references to "commit directly to main" in prior drafts. The definitive flow is: branch -> push -> draft PR -> CI -> mark ready if CI passes.
+- Keep docs/jules_prompt.txt unchanged (verbatim canonical prompt). Use the implementation guidance in this file for code and tooling (module path etc).
+- Where prior drafts suggested different go module paths, implementers MUST use github.com/jcmrs/gemini-prompt-engineer.
+
+[End of merged & corrected canonical instruction]
+```
