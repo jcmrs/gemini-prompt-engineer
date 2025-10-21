@@ -1,0 +1,15 @@
+id: "code-generation"
+version: "1.0"
+created_at: "2024-01-01T00:00:00Z"
+author: "Jules"
+intent: "Generate code in a specified language."
+description: "A simple template for generating code."
+model_preferences:
+  primary: "gemini-2.5-flash"
+  fallback: "gemini-2.5-pro"
+prompt_text: |
+  Write a function in {{.language}} that does the following: {{.task}}
+positive_examples:
+  - "Write a function in python that calculates the factorial of a number."
+negative_examples:
+  - "Explain the difference between a list and a tuple in python."

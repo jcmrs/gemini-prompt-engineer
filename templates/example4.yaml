@@ -1,0 +1,19 @@
+id: "question-answering"
+version: "1.0"
+created_at: "2024-01-01T00:00:00Z"
+author: "Jules"
+intent: "Answer a question based on a given context."
+description: "A template for question answering."
+model_preferences:
+  primary: "gemini-2.5-flash"
+  fallback: "gemini-2.5-pro"
+prompt_text: |
+  Based on the following context, answer the question.
+
+  Context: {{.context}}
+
+  Question: {{.question}}
+positive_examples:
+  - "Based on the following context, answer the question.\n\nContext: The sky is blue.\n\nQuestion: What color is the sky?"
+negative_examples:
+  - "What is the capital of France?"

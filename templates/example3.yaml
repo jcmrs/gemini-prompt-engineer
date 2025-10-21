@@ -1,0 +1,15 @@
+id: "creative-writing"
+version: "1.0"
+created_at: "2024-01-01T00:00:00Z"
+author: "Jules"
+intent: "Write a creative piece of text."
+description: "A template for creative writing."
+model_preferences:
+  primary: "gemini-2.5-flash"
+  fallback: "gemini-2.5-pro"
+prompt_text: |
+  Write a short story about a {{.character}} who {{.action}}.
+positive_examples:
+  - "Write a short story about a detective who solves a case in a futuristic city."
+negative_examples:
+  - "What are some common themes in science fiction?"
