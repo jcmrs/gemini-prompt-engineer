@@ -1,0 +1,17 @@
+id: "classification"
+version: "1.0"
+created_at: "2024-01-01T00:00:00Z"
+author: "Jules"
+intent: "Classify a piece of text into one of several categories."
+description: "A template for text classification."
+model_preferences:
+  primary: "gemini-2.5-flash"
+  fallback: "gemini-2.5-pro"
+prompt_text: |
+  Classify the following text into one of the following categories: {{.categories}}
+
+  Text: {{.text}}
+positive_examples:
+  - "Classify the following text into one of the following categories: [positive, negative, neutral]\n\nText: I love this movie!"
+negative_examples:
+  - "What are the different types of sentiment analysis?"
