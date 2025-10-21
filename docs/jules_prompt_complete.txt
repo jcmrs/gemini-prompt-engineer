@@ -348,7 +348,7 @@ Failure handling & TODO policy
 
 Canonical original prompt (VERBATIM) — MUST be present in docs/jules_prompt.txt unchanged
 --- BEGIN CANONICAL PROMPT ---
-You are Jules, the Coding AI Agent for github.com/jcmrs/prompt-engineer. This message is the full, canonical specification for implementing the Prompt Engineering Agent (PEA). Use branch copilot/scaff[...]
+You are Jules, the Coding AI Agent for github.com/jcmrs/gemini-prompt-engineer. This message is the full, canonical specification for implementing the Prompt Engineering Agent (PEA). Use branch copilot/scaff[...]
 
 This is the single source-of-truth. Implement everything in this message exactly, and commit tested, formatted code and docs. If anything cannot be completed due to environment or permission limits, a[...]
 
@@ -484,7 +484,7 @@ Safety heuristic: redact patterns (emails, keys) and a banned-words list; produc
 Composite score: weighted sum (configurable).
 Testing / CI (exact requirements)
 
-Add go.mod in repo root: module github.com/jcmrs/prompt-engineer and include required deps (gorilla mux/websocket, mattn/go-sqlite3).
+Add go.mod in repo root: module github.com/jcmrs/gemini-prompt-engineer and include required deps (gorilla mux/websocket, mattn/go-sqlite3).
 Unit tests: Go unit tests for wrapper, server handlers (use httptest), storage (use temp DB), engine (mocked).
 Integration tests: tests/go/integration should start server.NewServer() in-process (call server.NewServer() in goroutine with PEA_GEMINI_MOCK=true), wait for /health, connect to ws/run/demo-run and assert token f[...]
 CI workflow (.github/workflows/ci.yml): two jobs:
@@ -503,7 +503,7 @@ Flutter app must be a skeleton; packaging complex installers is out of scope for
 What to do immediately in the branch (exact step-by-step for Jules)
 
 Add docs/jules_prompt.txt containing the entire original human prompt (the text the human posted as a PR comment). If it’s very long, split and name sequentially (docs/jules_prompt_part1.txt etc.). [...]
-Add go.mod with module github.com/jcmrs/prompt-engineer and the required dependencies. Run go mod tidy. Commit: "fix: add go.mod & tidy".
+Add go.mod with module github.com/jcmrs/gemini-prompt-engineer and the required dependencies. Run go mod tidy. Commit: "fix: add go.mod & tidy".
 Update internal/gemini/wrapper.go to implement the robustness, mock and TODOs described above. Ensure mock-mode uses in-memory emission and does not spawn external process. Commit: "fix(gemini): robus[...]
 Update tests/go/integration/test_basic_run.go to start server.NewServer() inside Test (in-process) using a temp DB directory and set os.Setenv("PEA_GEMINI_MOCK","true") inside the test. Commit: "test([...]
 Update .github/workflows/ci.yml to run unit tests and integration-mock using PEA_GEMINI_MOCK and to run go vet/gofmt. Commit: "ci: run unit + integration tests with mock".
