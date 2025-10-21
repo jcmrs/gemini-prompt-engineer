@@ -5,13 +5,13 @@ Purpose
 -------
 This is the canonical instruction file for Jules (the GitHub-connected coding AI agent) to implement the stage‑1 Prompt Engineering Agent (PEA). It merges the original human prompt (verbatim), the stage‑1 policy decisions, the backend and UX requirements, and the exact implementation/CI/PR rules. This revised version fixes important ambiguities from prior drafts:
 
-- The Go module path used for implementation MUST be github.com/jcmrs/gemini-prompt-engineer (see section Implementation Notes).
+- The Go module path used for implementation MUST be github.com/jcmrs/gemini-prompt-engineer (see Implementation Notes).
 - Branch / PR policy is unambiguous: create branch `jules/scaffold-initial`, push the branch, open a draft PR to `main`; do NOT push direct to main.
 - The canonical original prompt is preserved verbatim in docs/jules_prompt.txt (underscore). Implementers must verify byte-for-byte equality and restore it if different.
 - CI specifics are explicit (ubuntu-latest runner and toolchain steps) and must use PEA_GEMINI_MOCK=true.
 
 IMPORTANT NOTE about the canonical prompt vs implementation specifics:
-- The original human prompt is preserved verbatim in docs/jules_prompt.txt as requested by the user. That original text may reference earlier module names. For implementation and tooling, use module = github.com/jcmrs/gemini-prompt-engineer (this is REQUIRED). The canonical prompt must remain unchanged, but implementation guidance in this file (and go.mod) must follow the repository path above.
+- The original human prompt is preserved verbatim in docs/jules_prompt.txt as requested by the user. That original text may reference earlier module names or repository URLs. For implementation and tooling, use module = github.com/jcmrs/gemini-prompt-engineer (this is REQUIRED). The canonical prompt must remain unchanged, but implementation guidance in this file and in go.mod must follow the repository path above.
 
 Summary of high-level constraints (non-negotiable)
 - NO API KEYS or static secrets anywhere in the repository or CI.
@@ -46,7 +46,7 @@ File / Branch / PR policy (explicit)
   1. git checkout main && git pull origin main
   2. git checkout -b jules/scaffold-initial
   3. Implement changes in that branch (small, focused commits, conventional messages)
-  4. Push branch to remote origin
+  4. Push branch to remote origin (github.com/jcmrs/gemini-prompt-engineer)
   5. Open a DRAFT PR from jules/scaffold-initial -> main with the required PR body (see PR Body section)
   6. If CI passes automatically, mark PR READY FOR REVIEW. If CI fails, keep draft and include raw failing logs + TODOs.
 - DO NOT push direct to main. DO NOT merge automatically.
@@ -348,9 +348,7 @@ Failure handling & TODO policy
 
 Canonical original prompt (VERBATIM) — MUST be present in docs/jules_prompt.txt unchanged
 --- BEGIN CANONICAL PROMPT ---
-You are Jules, the Coding AI Agent for github.com/jcmrs/gemini-prompt-engineer. This message is the full, canonical specification for implementing the Prompt Engineering Agent (PEA). Use branch copilot/scaff[...]
-
-This is the single source-of-truth. Implement everything in this message exactly, and commit tested, formatted code and docs. If anything cannot be completed due to environment or permission limits, a[...]
+You are Jules, the Coding AI Agent for github.com/jcmrs/prompt-engineer. This message is the full, canonical specification for implementing the Prompt Engineering Agent (PEA). Use branch copilot/scaffoldinitial-pea. This message is the single source-of-truth. Implement everything in this message exactly, and commit tested, formatted code and docs. If anything cannot be completed due to environment or permission limits, add a top-level TODO in the PR explaining what could not be run and why.
 
 High-level purpose
 
@@ -432,7 +430,7 @@ error: { "type":"error", "code":"TIMEOUT"|"MODEL_ERROR", "message":"..." }
 Gemini wrapper behavior (detailed, exact)
 
 Create internal/gemini/wrapper.go with:
-type Wrapper interface { CheckAuth(ctx) error; RunChatStreaming(ctx, model, input, settings, onToken) (finalResult, error); Embeddings(ctx, text) ([]float32, error) (optional) }
+type Wrapper interface { CheckAuth(ctx) error; RunChatStreaming(ctx, model, input, settings, onToken) (finalResult, error); Embeddings(ctx context.Context, text string) ([]float32, error) (optional) }
 NewWrapperFromEnv() reads PEA_GEMINI_MOCK env var.
 CheckAuth(ctx): if Mock -> return nil. Else:
 Try gemini whoami --format=json. If command fails or unknown, fallback to gemini auth status --format=json (if available). If neither available, fallback to a safe chat test: echo 'ping' | gemini chat[...]
@@ -484,7 +482,7 @@ Safety heuristic: redact patterns (emails, keys) and a banned-words list; produc
 Composite score: weighted sum (configurable).
 Testing / CI (exact requirements)
 
-Add go.mod in repo root: module github.com/jcmrs/gemini-prompt-engineer and include required deps (gorilla mux/websocket, mattn/go-sqlite3).
+Add go.mod in repo root: module github.com/jcmrs/prompt-engineer and include required deps (gorilla mux/websocket, mattn/go-sqlite3).
 Unit tests: Go unit tests for wrapper, server handlers (use httptest), storage (use temp DB), engine (mocked).
 Integration tests: tests/go/integration should start server.NewServer() in-process (call server.NewServer() in goroutine with PEA_GEMINI_MOCK=true), wait for /health, connect to ws/run/demo-run and assert token f[...]
 CI workflow (.github/workflows/ci.yml): two jobs:
@@ -503,7 +501,7 @@ Flutter app must be a skeleton; packaging complex installers is out of scope for
 What to do immediately in the branch (exact step-by-step for Jules)
 
 Add docs/jules_prompt.txt containing the entire original human prompt (the text the human posted as a PR comment). If it’s very long, split and name sequentially (docs/jules_prompt_part1.txt etc.). [...]
-Add go.mod with module github.com/jcmrs/gemini-prompt-engineer and the required dependencies. Run go mod tidy. Commit: "fix: add go.mod & tidy".
+Add go.mod with module github.com/jcmrs/prompt-engineer and the required dependencies. Run go mod tidy. Commit: "fix: add go.mod & tidy".
 Update internal/gemini/wrapper.go to implement the robustness, mock and TODOs described above. Ensure mock-mode uses in-memory emission and does not spawn external process. Commit: "fix(gemini): robus[...]
 Update tests/go/integration/test_basic_run.go to start server.NewServer() inside Test (in-process) using a temp DB directory and set os.Setenv("PEA_GEMINI_MOCK","true") inside the test. Commit: "test([...]
 Update .github/workflows/ci.yml to run unit tests and integration-mock using PEA_GEMINI_MOCK and to run go vet/gofmt. Commit: "ci: run unit + integration tests with mock".
